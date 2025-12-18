@@ -5,7 +5,7 @@ module.exports = {
     botName: "Group Guard",
 
     // ================= TELEGRAM =================
-    telegramBotToken: "8189731973:AAH-u426pLdUiVj89y_fO8btw3GZ-zwHjaU",
+    telegramBotToken: "8189731973:AAErU1UwuPDpxm7iZEMXLNCDrDVgnP9wmJM",
 
     // 👑 OWNER IDS (Telegram numeric IDs)
     ownerIds: [8167904992, 7134046678],
