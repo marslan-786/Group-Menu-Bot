@@ -1,0 +1,32 @@
+{
+  "name": "Impossible-Bot",
+  "version": "0.1",
+  "description": "Bot Only For Nothing Is Impossible",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "build": "node build.js",
+    "build:start": "node dist/index.js"
+  },
+  "keywords": [
+    "Public",
+    "Commands"
+  ],
+  "author": "Nothing Is Impossible",
+  "license": "ISC",
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.7.4",
+    "axios": "^1.7.0",
+    "form-data": "^4.0.0",
+    "moment-timezone": "^0.5.45",
+    "node-cache": "^5.1.2",
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "pino": "^9.3.0",
+    "node-telegram-bot-api": "^0.66.0"
+  },
+  "devDependencies": {
+    "javascript-obfuscator": "^4.1.1"
+  }
+}
