@@ -6,8 +6,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node index.js",
-    "build": "node build.js",
-    "build:start": "node dist/index.js"
+    "build": "node index.js",
+    "build:start": "node index.js"
   },
   "keywords": [
     "Public",
