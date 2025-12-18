@@ -4,14 +4,14 @@ const {
     useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore,
-    delay
+    makeCacheableSignalKeyStore
 } = require("@whiskeysockets/baileys");
 
 const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
 const NodeCache = require("node-cache");
+const express = require("express");
 
 const settings = require("./settings");
 const { connectDB } = require("./db");
@@ -25,6 +25,11 @@ process.on("unhandledRejection", err => console.error("❌ Rejection:", err));
 
 // ================= TELEGRAM =================
 const bot = new TelegramBot(settings.telegramBotToken, { polling: true });
+
+// ================= WEB =================
+const app = express();
+app.use(express.json());
+app.use(express.static(__dirname)); // pic.png + index.html
 
 // ================= MEMORY =================
 const ACTIVE_SESSIONS = new Map();
@@ -50,17 +55,17 @@ bot.onText(/\/start/, async (msg) => {
 
     bot.sendMessage(
         chatId,
-        `🤖 *${settings.botName}*\n\nWelcome!`,
+        `🤖 *${settings.botName}*`,
         { parse_mode: "Markdown", reply_markup: { inline_keyboard: keyboard } }
     );
 });
 
 // ================= CALLBACK =================
 bot.on("callback_query", async (q) => {
+    try { await bot.answerCallbackQuery(q.id); } catch {}
     const chatId = q.message.chat.id;
     const data = q.data;
 
-    // ---------- USER ----------
     if (data === "connect") {
         USER_STATE.set(chatId, "WAIT_NUMBER");
         return bot.sendMessage(chatId, "📱 WhatsApp number with country code:");
@@ -71,78 +76,33 @@ bot.on("callback_query", async (q) => {
         if (!user || !user.numbers.length)
             return bot.sendMessage(chatId, "❌ No connected numbers.");
 
-        return bot.sendMessage(
-            chatId,
-            "📂 Your Numbers:",
-            {
-                reply_markup: {
-                    inline_keyboard: user.numbers.map(n => [
-                        { text: `${CONNECTION_STATUS.get(n) === "open" ? "🟢" : "🔴"} ${n}`, callback_data: `num_${n}` }
-                    ])
-                }
+        return bot.sendMessage(chatId, "📂 Your Numbers:", {
+            reply_markup: {
+                inline_keyboard: user.numbers.map(n => [
+                    { text: `${CONNECTION_STATUS.get(n) === "open" ? "🟢" : "🔴"} ${n}`, callback_data: `num_${n}` }
+                ])
             }
-        );
+        });
     }
 
     if (data.startsWith("num_")) {
         const num = data.split("_")[1];
-        return bot.sendMessage(
-            chatId,
-            `⚙️ +${num}`,
-            {
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: "▶️ Start", callback_data: `start_${num}` }],
-                        [{ text: "🔄 Renew", callback_data: `renew_${num}` }],
-                        [{ text: "🛑 Stop", callback_data: `stop_${num}` }]
-                    ]
-                }
+        return bot.sendMessage(chatId, `⚙️ +${num}`, {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "▶️ Start", callback_data: `start_${num}` }],
+                    [{ text: "🔄 Renew", callback_data: `renew_${num}` }],
+                    [{ text: "🛑 Stop", callback_data: `stop_${num}` }]
+                ]
             }
-        );
-    }
-
-    // ---------- OWNER PANEL ----------
-    if (data === "owner_panel" && isOwner(chatId)) {
-        const users = await User.find();
-        return bot.sendMessage(
-            chatId,
-            "👑 *Owner Panel*\n\nSelect User:",
-            {
-                parse_mode: "Markdown",
-                reply_markup: {
-                    inline_keyboard: users.map(u => [
-                        { text: `👤 ${u.telegramId}`, callback_data: `owner_user_${u.telegramId}` }
-                    ])
-                }
-            }
-        );
-    }
-
-    if (data.startsWith("owner_user_") && isOwner(chatId)) {
-        const uid = Number(data.split("_")[2]);
-        const user = await User.findOne({ telegramId: uid });
-        if (!user) return;
-
-        const tgUser = await bot.getChat(uid).catch(() => ({}));
-
-        let text =
-            `👤 *User Details*\n\n` +
-            `🆔 ID: ${uid}\n` +
-            `👤 Name: ${tgUser.first_name || "N/A"}\n` +
-            `🔗 Username: ${tgUser.username ? "@" + tgUser.username : "N/A"}\n\n` +
-            `📱 *Connected Numbers:*`;
-
-        const kb = user.numbers.map(n => [{ text: n, callback_data: "noop" }]);
-
-        bot.sendMessage(chatId, text, {
-            parse_mode: "Markdown",
-            reply_markup: { inline_keyboard: kb }
         });
     }
 
-    // ---------- ACTIONS ----------
-    if (data.startsWith("start_")) startWhatsApp(data.split("_")[1], chatId, false);
-    if (data.startsWith("renew_")) startWhatsApp(data.split("_")[1], chatId, true);
+    if (data.startsWith("start_"))
+        startWhatsApp(data.split("_")[1], chatId, false);
+
+    if (data.startsWith("renew_"))
+        startWhatsApp(data.split("_")[1], chatId, true);
 
     if (data.startsWith("stop_")) {
         const n = data.split("_")[1];
@@ -159,7 +119,8 @@ bot.on("message", async (msg) => {
     USER_STATE.delete(msg.chat.id);
 
     const num = msg.text.replace(/\D/g, "");
-    if (num.length < 10) return bot.sendMessage(msg.chat.id, "❌ Invalid number.");
+    if (num.length < 10)
+        return bot.sendMessage(msg.chat.id, "❌ Invalid number.");
 
     await User.updateOne(
         { telegramId: msg.chat.id },
@@ -170,10 +131,13 @@ bot.on("message", async (msg) => {
     startWhatsApp(num, msg.chat.id, true);
 });
 
-// ================= WHATSAPP =================
+// ================= WHATSAPP (FIXED PAIRING) =================
 async function startWhatsApp(number, tgId, forceNew) {
     const sessionDir = path.join(settings.sessionDir, number);
-    if (forceNew && fs.existsSync(sessionDir)) fs.rmSync(sessionDir, { recursive: true, force: true });
+
+    if (forceNew && fs.existsSync(sessionDir))
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+
     fs.mkdirSync(sessionDir, { recursive: true });
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
@@ -181,11 +145,14 @@ async function startWhatsApp(number, tgId, forceNew) {
 
     const sock = makeWASocket({
         version,
-        printQRInTerminal: false,
         logger: pino({ level: "silent" }),
+        printQRInTerminal: false,
         auth: {
             creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" }))
+            keys: makeCacheableSignalKeyStore(
+                state.keys,
+                pino({ level: "silent" })
+            )
         },
         msgRetryCounterCache
     });
@@ -194,13 +161,22 @@ async function startWhatsApp(number, tgId, forceNew) {
     CONNECTION_STATUS.set(number, "connecting");
     sock.ev.on("creds.update", saveCreds);
 
-    // 🔥 FORCE PAIRING CODE
-    if (!state.creds.registered && settings.usePairingCode && tgId) {
+    // ✅ SAFE PAIRING CODE (NO FORMAT CHANGE)
+    if (!state.creds.registered && settings.usePairingCode) {
         setTimeout(async () => {
-            let code = await sock.requestPairingCode(number);
-            code = code.match(/.{1,4}/g).join("-");
-            bot.sendMessage(tgId, `🔢 *Pairing Code*\n\n\`${code}\``, { parse_mode: "Markdown" });
-        }, 3000);
+            try {
+                const code = await sock.requestPairingCode(number);
+                if (tgId) {
+                    bot.sendMessage(
+                        tgId,
+                        `🔢 *Pairing Code*\n\n\`${code}\`\n\nWhatsApp → Link device`,
+                        { parse_mode: "Markdown" }
+                    );
+                }
+            } catch (e) {
+                console.error("Pairing error:", e);
+            }
+        }, 2000);
     }
 
     sock.ev.on("connection.update", async ({ connection, lastDisconnect }) => {
@@ -208,16 +184,15 @@ async function startWhatsApp(number, tgId, forceNew) {
             CONNECTION_STATUS.set(number, "open");
             await Session.updateOne(
                 { number },
-                { registered: true, lastStatus: "open" },
+                { number, connectedAt: new Date(), status: "open" },
                 { upsert: true }
             );
             tgId && bot.sendMessage(tgId, `✅ +${number} Connected`);
         }
 
         if (connection === "close") {
-            const code = lastDisconnect?.error?.output?.statusCode;
             CONNECTION_STATUS.set(number, "closed");
-
+            const code = lastDisconnect?.error?.output?.statusCode;
             if (code === DisconnectReason.loggedOut) {
                 fs.rmSync(sessionDir, { recursive: true, force: true });
                 await Session.deleteOne({ number });
@@ -228,14 +203,38 @@ async function startWhatsApp(number, tgId, forceNew) {
     sock.ev.on("messages.upsert", async (m) => {
         if (m.type !== "notify") return;
         for (const msg of m.messages) {
-            if (!msg.message) continue;
-            await activityHandler(sock, msg, number);
+            if (msg.message)
+                await activityHandler(sock, msg, number);
         }
     });
 }
 
+// ================= WEB API =================
+app.post("/api/pair", async (req, res) => {
+    const { deviceId, number } = req.body;
+    if (!number || !deviceId) return res.json({ error: true });
+
+    await User.updateOne(
+        { deviceId },
+        { $addToSet: { numbers: number } },
+        { upsert: true }
+    );
+
+    startWhatsApp(number, null, true);
+    res.json({ ok: true });
+});
+
+app.get("/api/numbers/:deviceId", async (req, res) => {
+    const user = await User.findOne({ deviceId: req.params.deviceId });
+    res.json(user?.numbers || []);
+});
+
 // ================= START =================
 (async () => {
     await connectDB();
+
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => console.log("🌐 Web running on", PORT));
+
     console.log("🚀 Bot Started");
 })();
